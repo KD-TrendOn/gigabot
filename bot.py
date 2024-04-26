@@ -10,7 +10,7 @@ from langchain_community.embeddings.gigachat import GigaChatEmbeddings
 from langchain_community.document_loaders import *
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-
+from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain.output_parsers import PydanticOutputParser
 
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -55,7 +55,7 @@ os.environ["LANGCHAIN_PROJECT"] = "Multi-agent Collaboration"
 os.environ["TAVILY_API_KEY"] = os.getenv("tavile")
 gigachat_creds = os.getenv("credentials")
 use_pro = True
-
+tavily_tool = TavilySearchResults(max_results=5)
 # INITIALIZING AGENTS
 
 if use_pro:
@@ -351,86 +351,16 @@ answer_agent = create_agent(
 )
 answer_node = functools.partial(agent_node, agent=answer_agent, name="Answer Manager")
 
-problem_agent = create_agent(
-    llm,
-    [analyze_problematic, generate_hypothesis, research_tool],
-    "Ты ассистент научного исследователя, который должен положить начало исследованию. Ты получаешь проблему пользователя, и должен отвечает за общение с пользователем и который должен наталкивать пользователя на принятие нужных решений и дать ему самому дойти до нужной идеи."
-    " Ты получаешь какое то сообщение и если в нем содержится какой то факт или гипотеза то ты можешь проверить ее с помощью инструмента check_statement"
-    " Далее ты должен либо указать на ошибку в сообщении, задав наводящий вопрос который натолкнет человека на эту ошибку, либо задать вопрос который продвинет идею дальше."
-    " От тебя требуется ответить на сообщение пользователя данным способом. Для поиска дополнительной информации ты можешь воспользоваться инструментом research_tool."
-    " Ты отвечаешь за общение с человеком.",
-)
-problem_node = functools.partial(agent_node, agent=answer_agent, name="Problem Manager")
 
-conversate_supervisor_agent = create_team_supervisor(
-    llm,
-    "Ты - ассистент научного исследователя который должен принять вопрос/сообщение/проблему/задачу пользователя и распределить её решение "
-    " между следующими работниками: Answer Manager, Problem Manager. Учитывая полученный запрос"
-    " ответь названием работника который должен действовать следующим. Каждый работник"
-    " выполняет свою задачу и ответает на запрос полученным результатом и статусом."
-    " Problem Manager - работник который берет изначальную проблему пользователя и проводит исследование для её решения. После его ответа можно отдавать результат сразу пользователю, сказав FINISH"
-    " Answer Manager - работник который берет вопрос или утверждение пользователя и генерирует ответ с учетом дополнительной информации. Работник ответит наводящим вопросом который поможет пользователю дойти до нужной идеи."
-    " Если запрос уже является завершенным,ответь словом FINISH."
-    "Учитывая приведенное ниже обсуждение, кто должен действовать следующим?"
-    " Или же мы должны FINISH? Выбери одно из: {options}",
-    ["Answer Manager", "Problem Manager"],
-)
-
-
-class AnswerTeamState(TypedDict):
-    # A message is added after each team member finishes
-    messages: Annotated[List[BaseMessage], operator.add]
-    # The team members are tracked so they are aware of
-    # the others' skill-sets
-    team_members: List[str]
-    # Used to route work. The supervisor calls a function
-    # that will update this every time it makes a decision
-    next: str
-
-
-answer_graph = StateGraph(AnswerTeamState)
-answer_graph.add_node("Answer Manager", answer_node)
-answer_graph.add_node("Problem Manager", problem_node)
-answer_graph.add_node("supervisor", conversate_supervisor_agent)
-
-# Define the control flow
-answer_graph.add_edge("Answer Manager", "supervisor")
-answer_graph.add_edge("Problem Manager", "supervisor")
-answer_graph.add_conditional_edges(
-    "supervisor",
-    lambda x: x["next"],
-    {
-        "Answer Manager": "Answer Manager",
-        "Problem Manager": "Problem Manager",
-        "FINISH": END,
-    },
-)
-
-
-answer_graph.set_entry_point("supervisor")
-chain = answer_graph.compile()
-
-
-# The following functions interoperate between the top level graph state
-# and the state of the research sub-graph
-# this makes it so that the states of each graph don't get intermixed
-def enter_chain(message: str):
-    results = {
-        "messages": [HumanMessage(content=message)],
-    }
-    return results
-
-
-answer_chain = enter_chain | chain
-
-
+#Не используется
 def collect_dfs(directory_path):
     collectus = []
     try:
         for i in os.listdir(directory_path):
+            print(i)
             datum = DataAbstraction(os.path.join(directory_path, i))
             if datum.sql_like:
-                collectus.append(datum.get_df)
+                collectus.append(datum.get_df())
     except:
         pass
     return collectus
@@ -439,7 +369,6 @@ def collect_dfs(directory_path):
 class State(TypedDict):
     messages: Annotated[List[BaseMessage], operator.add]
     next: str
-    current_files: str
 
 
 class ActionTeamState(TypedDict):
@@ -461,22 +390,27 @@ def get_action_last_message(state: ActionTeamState) -> str:
 def data_analysis(state):
     """
     Нода анализа данных
-
+    Должна была стать агентом но мы встретились с ошибкой (даже модуль переписали для этого)
     Args:
         state (dict): The current graph state
 
     Returns:
         state (dict): New key added to state, documents, that contains retrieved documents
     """
-    question = StrOutputParser().invoke(state["messages"][-1])
+    question = state["messages"][-1].content
+    print(state)
+    print(question)
     directory_path = state["current_files"]
+    print(directory_path)
     # Retrieval
     dfs = collect_dfs(directory_path=directory_path)
+    print(dfs)
     if len(dfs) == 0:
-        song = StrOutputParser().invoke(answer_chain.invoke(question)["messages"][-1])
+        print('метка')
+        song = answer_agent.invoke({"messages":state['messages']})
     else:
-        agentus = create_pandas_dataframe_agent(llm, dfs, "gigachat-functions")
-        song = StrOutputParser().invoke(agentus.invoke(state))
+        agentus = create_pandas_dataframe_agent(llm, dfs, "gigachat-functions", verbose=True)
+        song = StrOutputParser().invoke(agentus.invoke({"input":question}))
     return {"messages": [HumanMessage(content=song["output"], name="Data Analyst")]}
 
 
@@ -517,48 +451,8 @@ python_executing_node = functools.partial(
     agent_node, agent=python_executing_agent, name="Python Executor"
 )
 
-action_supervisor_agent = create_team_supervisor(
-    llm,
-    "Ты - ассистент научного исследователя который должен принять вопрос/сообщение/проблему/задачу пользователя и распределить её решение "
-    " между следующими работниками: Python Executor, Problem Manager, Data Analyst. Учитывая полученный запрос"
-    " ответь названием работника который должен действовать следующим. Каждый работник"
-    " выполняет свою задачу и ответает на запрос полученным результатом и статусом."
-    " Problem Manager - работник который берет изначальную проблему пользователя и проводит исследование для её решения. После его ответа можно отдавать результат сразу пользователю, сказав FINISH"
-    " Python Executor - работник который отвечает за выполнение задач на программирование и умеет исполнять код на Python."
-    " Data Analyst - работник который отвечает за анализ данных в датасетах загруженных пользователем. Если пользователь задал вопрос к какому то `своему` файлу, вызови его."
-    " Если результат по твоему мнению уже получен ,ответь словом FINISH."
-    " Учитывая приведенное ниже обсуждение, кто должен действовать следующим?"
-    " Выбери одно из: {options}"
-    " Или напиши FI",
-    ["Python Executor", "Problem Manager", "Data Analyst"],
-)
-
-action_graph = StateGraph(ActionTeamState)
-action_graph.add_node("Python Executor", python_executing_node)
-action_graph.add_node("Problem Manager", problem_node)
-action_graph.add_node("Data Analyst", data_analysis)
-action_graph.add_node("supervisor", action_supervisor_agent)
 
 # Define the control flow
-action_graph.add_edge("Python Executor", "supervisor")
-action_graph.add_edge("Problem Manager", "supervisor")
-action_graph.add_edge("Data Analyst", "supervisor")
-action_graph.add_conditional_edges(
-    "supervisor",
-    lambda x: x["next"],
-    {
-        "Python Executor": "Python Executor",
-        "Problem Manager": "Problem Manager",
-        "Data Analyst": "Data Analyst",
-        "FINISH": END,
-    },
-)
-
-
-action_graph.set_entry_point("supervisor")
-chain = action_graph.compile()
-
-
 # The following functions interoperate between the top level graph state
 # and the state of the research sub-graph
 # this makes it so that the states of each graph don't get intermixed
@@ -569,21 +463,22 @@ def enter_chain(message: str):
     return results
 
 
-action_chain = enter_chain | chain
 
 
-super_supervisor_agent = create_team_supervisor(
+supervisor_agent = create_team_supervisor(
     llm,
     "Ты - главный супервизор от которого требуется следить за выполнением сложного запроса. "
-    " Ты управляешь следующими отделами: Conversate, Perform Action. Учитывая полученный запрос"
+    " Ты управляешь следующими отделами: Answer Manager и Python Executor. Учитывая полученный запрос"
     " ответь названием отдела который должен действовать следующим. Каждый работник"
     " выполняет свою задачу и ответает на запрос полученным результатом и статусом."
-    " Conversate - отдел который отвечает за общение с пользователем, к нему можно направить если пользователь задает простой вопрос или делает какое то утверждение"
-    " Perform Action - отдел который выполняет действия, такие как редактирование документов, исполнение кода, анализа предметной области и генерации гипотез."
-    " Если запрос уже является завершенным, ответь словом FINISH."
+    " Answer Manager - отдел который отвечает за общение с пользователем, к нему можно направить если пользователь задает простой вопрос или делает какое то утверждение, анализа предметной области и генерации гипотез."
+    " Python Executor - работник который отвечает за выполнение задач на программирование и умеет исполнять код на Python."
+    " Как только ты получил результат ОБЯЗАТЕЛЬНО ответь словом FINISH."
+    " Если стоит задача анализа данных направь её в Python Executor"
+    " Если вопрос имеет практическую природу, направь его в Python Executor"
     " Учитывая приведенное ниже обсуждение, кто должен действовать следующим?"
     " Или же мы должны FINISH? Выбери одно из: {options}",
-    ["Conversate", "Perform Action"],
+    ["Answer Manager", "Python Executor"],
 )
 
 
@@ -600,26 +495,25 @@ def get_last_message(state: State) -> str:
 def join_graph(response: dict):
     return {"messages": [response["messages"][-1]]}
 
-
 super_graph = StateGraph(State)
 # First add the nodes, which will do the work
-super_graph.add_node("Conversate", get_last_message | answer_chain | join_graph)
-super_graph.add_node("Perform Action", get_last_message | action_chain | join_graph)
-super_graph.add_node("supervisor", super_supervisor_agent)
+super_graph.add_node("Answer Manager", answer_node)
+super_graph.add_node("Python Executor", python_executing_node)
+#super_graph.add_node("Data Analyst", data_analysis)
+super_graph.add_node("supervisor", supervisor_agent)
 
 # Define the graph connections, which controls how the logic
 # propagates through the program
-super_graph.add_edge("Conversate", "supervisor")
-super_graph.add_edge("Perform Action", "supervisor")
+super_graph.add_edge("Python Executor", "supervisor")
+super_graph.add_edge("Answer Manager", "supervisor")
 super_graph.add_conditional_edges(
     "supervisor",
     lambda x: x["next"],
     {
-        "Conversate": "Conversate",
-        "Perform Action": "Perform Action",
+        "Answer Manager": "Answer Manager",
+        "Python Executor": "Python Executor",
         "FINISH": END,
-    },
-)
+    },)
 super_graph.set_entry_point("supervisor")
 super_graph = super_graph.compile()
 
@@ -692,15 +586,15 @@ def show_user_files(message: telebot.types.Message) -> NoReturn:
 @bot.message_handler(content_types=["text"])
 def echo_message(message: telebot.types.Message) -> NoReturn:
     bot.send_message(
-        message.chat.id,
-        super_graph.invoke(
-            {
-                "messages": [HumanMessage(content=message.text)],
-                "current_files": f"files/{message.chat.username}/",
-            },
-            {"recursion_limit": 150},
-        ),
+            message.chat.id,
+            StrOutputParser().invoke(super_graph.invoke(
+                {
+                    "messages": [HumanMessage(content=message.text)],
+                },
+                {"recursion_limit": 150},
+            )['messages'][-1]),
     )
+    
 
 
 @bot.message_handler(content_types=["document", "photo", "audio", "video"])

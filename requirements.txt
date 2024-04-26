@@ -3,7 +3,7 @@ langchainhub
 gigachain
 gigachain_community
 PyMuPDF
-rontend
+frontend
 tools
 gigagraph
 python-docx

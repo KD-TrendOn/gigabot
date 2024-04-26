@@ -24,10 +24,10 @@ from langchain.agents.agent import (
 )
 
 
-def create__prompt(system_prompt) -> ChatPromptTemplate:
-    if system_prompt:
+def create__prompt(system_message) -> ChatPromptTemplate:
+    if system_message:
         messages = [
-            ("system", system_prompt),
+            system_message,
             MessagesPlaceholder(variable_name="chat_history", optional=True),
             HumanMessagePromptTemplate.from_template("{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),

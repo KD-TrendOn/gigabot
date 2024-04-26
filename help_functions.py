@@ -94,8 +94,6 @@ def create_team_supervisor(llm: GigaChat, system_prompt, members) -> str:
     )
 
 
-tavily_tool = TavilySearchResults(max_results=5)
-
 
 @tool
 def scrape_webpages(urls: List[str]) -> str:
